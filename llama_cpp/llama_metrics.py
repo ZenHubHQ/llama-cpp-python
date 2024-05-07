@@ -34,7 +34,7 @@ class Metrics:
     end_to_end_latency: float
     prefill_tokens: int
     generation_tokens: int  
-    kv_cache_usage_ratio: int
+    kv_cache_usage_ratio: float
 
 
 class MetricsExporter:
