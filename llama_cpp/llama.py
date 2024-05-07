@@ -38,6 +38,16 @@ from .llama_tokenizer import BaseLlamaTokenizer, LlamaTokenizer
 import llama_cpp.llama_cpp as llama_cpp
 import llama_cpp.llama_chat_format as llama_chat_format
 
+from llama_cpp.llama_metrics import Metrics, MetricsExporter
+
+from llama_cpp._utils import (
+    infer_service_from_prompt, 
+    get_cpu_usage, 
+    get_ram_usage, 
+    get_gpu_info_by_pid,
+    get_gpu_general_info,
+)
+
 from llama_cpp.llama_speculative import LlamaDraftModel
 
 import numpy as np
@@ -447,6 +457,9 @@ class Llama:
             self.chat_format = "llama-2"
             if self.verbose:
                 print(f"Using fallback chat format: {chat_format}", file=sys.stderr)
+
+        # Prometheus metrics
+        self.metrics = MetricsExporter()
 
     @property
     def ctx(self) -> llama_cpp.llama_context_p:
@@ -950,6 +963,19 @@ class Llama:
 
         completion_id: str = f"cmpl-{str(uuid.uuid4())}"
         created: int = int(time.time())
+
+        # Variables required for metric collection
+        _metrics_dict = {}
+        _ttft_start = time.time()
+        _pid = os.getpid()
+        _tpot_metrics = []
+        _labels = {
+            "service": infer_service_from_prompt(prompt),  # Infer the service for which the completion is being generated
+            "request_type": "chat/completions",
+        }
+        # Get CPU usage before generating completion so it can be used to calculate CPU when called after completing the process
+        _ = get_cpu_usage(_pid)
+
         # If prompt is empty, initialize completion with BOS token to avoid
         # detokenization including a space at the beginning of the completion
         completion_tokens: List[int] = [] if len(prompt) > 0 else [self.token_bos()]
@@ -1043,23 +1069,26 @@ class Llama:
 
         finish_reason = "length"
         multibyte_fix = 0
-        for token in self.generate(
-            prompt_tokens,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            typical_p=typical_p,
-            temp=temperature,
-            tfs_z=tfs_z,
-            mirostat_mode=mirostat_mode,
-            mirostat_tau=mirostat_tau,
-            mirostat_eta=mirostat_eta,
-            frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty,
-            repeat_penalty=repeat_penalty,
-            stopping_criteria=stopping_criteria,
-            logits_processor=logits_processor,
-            grammar=grammar,
+        _tpot_start = time.time()
+        for idx, token in enumerate(
+            self.generate(
+                prompt_tokens,
+                top_k=top_k,
+                top_p=top_p,
+                min_p=min_p,
+                typical_p=typical_p,
+                temp=temperature,
+                tfs_z=tfs_z,
+                mirostat_mode=mirostat_mode,
+                mirostat_tau=mirostat_tau,
+                mirostat_eta=mirostat_eta,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                repeat_penalty=repeat_penalty,
+                stopping_criteria=stopping_criteria,
+                logits_processor=logits_processor,
+                grammar=grammar,
+            )
         ):
             assert self._model.model is not None
             if llama_cpp.llama_token_is_eog(self._model.model, token):
@@ -1215,6 +1244,14 @@ class Llama:
                 text = self.detokenize(completion_tokens, prev_tokens=prompt_tokens)
                 finish_reason = "length"
                 break
+
+            # Record TTFT metric (once)
+            if idx == 0:
+                _metrics_dict["time_to_first_token"] = time.time() - _ttft_start
+            # Record TPOT metric
+            else:
+                _tpot_metrics.append(time.time() - _tpot_start)
+            _tpot_start = time.time()  # reset
 
         if stopping_criteria is not None and stopping_criteria(
             self._input_ids, self._scores[-1, :]
@@ -1403,6 +1440,48 @@ class Llama:
                 "token_logprobs": token_logprobs,
                 "top_logprobs": top_logprobs,
             }
+        
+        # Record TPOT metrics (per generated token)
+        _metrics_dict["time_per_output_token"] = _tpot_metrics
+
+        # Record metrics from the C++ backend (converted to seconds)
+        _timings = llama_cpp.llama_get_timings(self._ctx.ctx)
+        _metrics_dict["load_time"] = round(_timings.t_load_ms / 1e3, 2)
+        _metrics_dict["sample_time"] = round(_timings.t_sample_ms / 1e3, 2)
+        _metrics_dict["sample_throughput"] = round(1e3 / _timings.t_sample_ms * _timings.n_sample, 2) if _timings.t_sample_ms > 0 else 0.0
+        _metrics_dict["prompt_eval_time"] = round(_timings.t_p_eval_ms / 1e3, 2)
+        _metrics_dict["prompt_eval_throughput"] = round(1e3 / _timings.t_p_eval_ms * _timings.n_p_eval, 2) if _timings.t_p_eval_ms > 0 else 0.0
+        _metrics_dict["completion_eval_time"] = round(_timings.t_eval_ms / 1e3, 2)
+        _metrics_dict["completion_eval_throughput"] = round(1e3 / _timings.t_eval_ms * _timings.n_eval, 2) if _timings.t_eval_ms > 0 else 0.0
+        _metrics_dict["end_to_end_latency"] = round((_timings.t_end_ms - _timings.t_start_ms) / 1e3, 2)
+
+        # Record prefill and generation token metrics
+        _metrics_dict["prefill_tokens"] = len(prompt_tokens)
+        _metrics_dict["generation_tokens"] = len(completion_tokens)
+
+        # Record system info
+        _gpu_utilization, _gpu_memory_used, _gpu_memory_free = get_gpu_general_info()
+        _metrics_dict["cpu_utilization"] = get_cpu_usage(_pid)  # TODO: Returning always 0.0 -> check
+        _metrics_dict["cpu_ram_pid"] = get_ram_usage(_pid)
+        _metrics_dict["gpu_utilization"] = _gpu_utilization
+        _metrics_dict["gpu_ram_usage"] = _gpu_memory_used
+        _metrics_dict["gpu_ram_free"] = _gpu_memory_free
+        _metrics_dict["gpu_ram_pid"] = get_gpu_info_by_pid(_pid)
+        _metrics_dict["state_size"] = llama_cpp.llama_get_state_size(self._ctx.ctx)
+        _metrics_dict["kv_cache_usage_ratio"] = round(1. * llama_cpp.llama_get_kv_cache_used_cells(self._ctx.ctx) / self.n_ctx(), 2)
+        _metrics_dict["system_info"] = {
+            "model": model_name,
+            "n_params": str(llama_cpp.llama_model_n_params(self.model)),
+            "n_embd": str(self.n_embd()),
+            "n_ctx": str(self.n_ctx()),
+            "n_vocab": str(self.n_vocab()),
+            "n_threads": str(self.n_threads)
+        } 
+
+        # Log metrics to Prometheus
+        #print(_metrics_dict, file=sys.stderr)
+        _all_metrics = Metrics(**_metrics_dict)
+        self.metrics.log_metrics(_all_metrics, labels=_labels)
 
         yield {
             "id": completion_id,
