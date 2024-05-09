@@ -7,6 +7,8 @@ from threading import Lock
 from functools import partial
 from typing import Iterator, List, Optional, Union, Dict
 
+from prometheus_client import make_asgi_app
+
 import llama_cpp
 
 import anyio
@@ -132,6 +134,7 @@ def create_app(
         middleware=middleware,
         title="🦙 llama.cpp Python API",
         version=llama_cpp.__version__,
+        root_path=server_settings.root_path,
     )
     app.add_middleware(
         CORSMiddleware,
@@ -144,6 +147,11 @@ def create_app(
 
     assert model_settings is not None
     set_llama_proxy(model_settings=model_settings)
+
+    # Add prometheus asgi middleware to route /metrics requests
+    # see: https://prometheus.github.io/client_python/exporting/http/fastapi-gunicorn/
+    metrics_app = make_asgi_app()
+    app.mount("/metrics", metrics_app)
 
     if server_settings.disable_ping_events:
         set_ping_message_factory(lambda: bytes())
