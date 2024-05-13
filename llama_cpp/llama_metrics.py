@@ -196,7 +196,8 @@ class MetricsExporter:
         """
         self._histrogram_load_time.labels(**labels).observe(metrics.load_time)
         self._histogram_sample_time.labels(**labels).observe(metrics.sample_time)
-        self._histogram_time_to_first_token.labels(**labels).observe(metrics.time_to_first_token)
+        if metrics.time_to_first_token:
+            self._histogram_time_to_first_token.labels(**labels).observe(metrics.time_to_first_token)
         for _tpot in metrics.time_per_output_token:
             self._histogram_time_per_output_token.labels(**labels).observe(_tpot)
         self._histogram_prompt_eval_time.labels(**labels).observe(metrics.prompt_eval_time)
