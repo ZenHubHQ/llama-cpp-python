@@ -3,7 +3,7 @@ import sys
 import psutil
 import subprocess
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Union
 
 # Avoid "LookupError: unknown encoding: ascii" when open() called in a destructor
 outnull_file = open(os.devnull, "w")
@@ -123,25 +123,3 @@ def get_gpu_general_info() -> Tuple[float, float, float]:
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
     return 0.0, 0.0, 0.0
-
-def infer_service_from_prompt(prompt: str | List[str]):
-    """
-    Infer the service for which a completion request is sent based on the prompt.
-    """
-    LABEL_SUGGESTIONS_TASK = "Your task is to select the most relevant labels for a GitHub issue title from a list of labels provided."
-    ACCEPTANCE_CRITERIA_TASK = "Your task is to write the acceptance criteria for a GitHub issue."
-    SPRINT_REVIEW_TASK = "You are helping me prepare a sprint review."
-
-    if isinstance(prompt, list):
-        prompt = " ".join(prompt)
-
-    if LABEL_SUGGESTIONS_TASK in prompt:
-        return "label-suggestions"
-
-    elif ACCEPTANCE_CRITERIA_TASK in prompt:
-        return "acceptance-criteria"
-
-    elif SPRINT_REVIEW_TASK in prompt:
-        return "sprint-review"
-
-    return "not-specified"
