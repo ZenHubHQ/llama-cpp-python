@@ -2,6 +2,7 @@ _skbuild/
 
 .envrc
 
+# LLMs - comment if you'd like to bake the model into the image
 models/
 
 # Byte-compiled / optimized / DLL files

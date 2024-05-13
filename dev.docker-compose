@@ -1,0 +1,15 @@
+version: '3'
+services:
+    dev-llama-cpp-python:
+        build:
+            context: .
+            dockerfile: dev.Dockerfile
+        ports: 
+            - 8000:8000
+        volumes:
+            - ./llama_cpp:/app/llama_cpp
+        networks:
+            - zh-service-network
+networks:
+    zh-service-network:
+        external: true
