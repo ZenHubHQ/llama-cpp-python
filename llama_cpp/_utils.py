@@ -3,7 +3,7 @@ import sys
 import psutil
 import subprocess
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 # Avoid "LookupError: unknown encoding: ascii" when open() called in a destructor
 outnull_file = open(os.devnull, "w")
@@ -112,7 +112,7 @@ def get_gpu_info_by_pid(pid) -> float:
         pass
     return 0.0
 
-def get_gpu_general_info() -> tuple[float, float, float]:
+def get_gpu_general_info() -> Tuple[float, float, float]:
     """
     GPU general info (if GPU is available)
     """
