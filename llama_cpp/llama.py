@@ -41,7 +41,6 @@ import llama_cpp.llama_chat_format as llama_chat_format
 from llama_cpp.llama_metrics import Metrics, MetricsExporter
 
 from llama_cpp._utils import (
-    infer_service_from_prompt, 
     get_cpu_usage, 
     get_ram_usage, 
     get_gpu_info_by_pid,
