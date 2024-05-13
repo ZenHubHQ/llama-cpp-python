@@ -87,6 +87,7 @@ class LlamaChatCompletionHandler(Protocol):
         grammar: Optional[llama.LlamaGrammar] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
+        ai_service: Optional[str] = None,
         **kwargs,  # type: ignore
     ) -> Union[
         llama_types.CreateChatCompletionResponse,
@@ -535,6 +536,7 @@ def chat_formatter_to_chat_completion_handler(
         logit_bias: Optional[Dict[str, float]] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
+        ai_service: Optional[str] = None,
         **kwargs,  # type: ignore
     ) -> Union[
         llama_types.CreateChatCompletionResponse,
@@ -625,6 +627,7 @@ def chat_formatter_to_chat_completion_handler(
             stopping_criteria=stopping_criteria,
             grammar=grammar,
             logit_bias=logit_bias,
+            ai_service=ai_service
         )
         if tool is not None:
             tool_name = tool["function"]["name"]

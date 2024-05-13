@@ -70,6 +70,7 @@ class Llama:
     """High-level Python wrapper for a llama.cpp model."""
 
     __backend_initialized = False
+    __prometheus_metrics = MetricsExporter()
 
     def __init__(
         self,
@@ -464,7 +465,7 @@ class Llama:
                 print(f"Using fallback chat format: {chat_format}", file=sys.stderr)
 
         # Prometheus metrics
-        self.metrics = MetricsExporter()
+        self.metrics = self.__prometheus_metrics
 
     @property
     def ctx(self) -> llama_cpp.llama_context_p:
@@ -960,6 +961,7 @@ class Llama:
         logits_processor: Optional[LogitsProcessorList] = None,
         grammar: Optional[LlamaGrammar] = None,
         logit_bias: Optional[Dict[str, float]] = None,
+        ai_service: Optional[str] = None
     ) -> Union[
         Iterator[CreateCompletionResponse], Iterator[CreateCompletionStreamResponse]
     ]:
@@ -974,8 +976,10 @@ class Llama:
         _ttft_start = time.time()
         _pid = os.getpid()
         _tpot_metrics = []
+        if not ai_service:
+            raise ValueError("ai_service must be provided")
         _labels = {
-            "service": infer_service_from_prompt(prompt),  # Infer the service for which the completion is being generated
+            "service": ai_service if ai_service is not None else "not-specified",
             "request_type": "chat/completions",
         }
         # Get CPU usage before generating completion so it can be used to calculate CPU when called after completing the process
@@ -1445,7 +1449,10 @@ class Llama:
                 "token_logprobs": token_logprobs,
                 "top_logprobs": top_logprobs,
             }
-        
+        # Record TTFT metric -- Setting to None if no tokens were generated
+        if not _metrics_dict.get("time_to_first_token"):
+            _metrics_dict["time_to_first_token"] = None
+
         # Record TPOT metrics (per generated token)
         _metrics_dict["time_per_output_token"] = _tpot_metrics
 
@@ -1484,7 +1491,6 @@ class Llama:
         } 
 
         # Log metrics to Prometheus
-        #print(_metrics_dict, file=sys.stderr)
         _all_metrics = Metrics(**_metrics_dict)
         self.metrics.log_metrics(_all_metrics, labels=_labels)
 
@@ -1493,6 +1499,7 @@ class Llama:
             "object": "text_completion",
             "created": created,
             "model": model_name,
+            "service": ai_service,
             "choices": [
                 {
                     "text": text_str,
@@ -1535,6 +1542,7 @@ class Llama:
         logits_processor: Optional[LogitsProcessorList] = None,
         grammar: Optional[LlamaGrammar] = None,
         logit_bias: Optional[Dict[str, float]] = None,
+        ai_service: Optional[str] = None
     ) -> Union[CreateCompletionResponse, Iterator[CreateCompletionStreamResponse]]:
         """Generate text from a prompt.
 
@@ -1598,6 +1606,7 @@ class Llama:
             logits_processor=logits_processor,
             grammar=grammar,
             logit_bias=logit_bias,
+            ai_service=ai_service
         )
         if stream:
             chunks: Iterator[CreateCompletionStreamResponse] = completion_or_chunks
@@ -1632,6 +1641,7 @@ class Llama:
         logits_processor: Optional[LogitsProcessorList] = None,
         grammar: Optional[LlamaGrammar] = None,
         logit_bias: Optional[Dict[str, float]] = None,
+        ai_service: Optional[str] = None
     ) -> Union[CreateCompletionResponse, Iterator[CreateCompletionStreamResponse]]:
         """Generate text from a prompt.
 
@@ -1695,6 +1705,7 @@ class Llama:
             logits_processor=logits_processor,
             grammar=grammar,
             logit_bias=logit_bias,
+            ai_service=ai_service
         )
 
     def create_chat_completion(
@@ -1727,6 +1738,7 @@ class Llama:
         logit_bias: Optional[Dict[str, float]] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
+        ai_service: Optional[str] = None
     ) -> Union[
         CreateChatCompletionResponse, Iterator[CreateChatCompletionStreamResponse]
     ]:
@@ -1796,6 +1808,7 @@ class Llama:
             logits_processor=logits_processor,
             grammar=grammar,
             logit_bias=logit_bias,
+            ai_service=ai_service
         )
 
     def create_chat_completion_openai_v1(
