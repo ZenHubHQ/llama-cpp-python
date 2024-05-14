@@ -153,7 +153,7 @@ def mock_llama(monkeypatch):
 
 def test_llama_patch(mock_llama):
     n_ctx = 128
-    ai_service = "testing"
+    ai_service = "label-suggestions"
     llama = llama_cpp.Llama(model_path=MODEL, vocab_only=True, n_ctx=n_ctx)
     
     n_vocab = llama_cpp.llama_n_vocab(llama._model.model)
@@ -232,7 +232,7 @@ def test_utf8(mock_llama):
     llama = llama_cpp.Llama(model_path=MODEL, vocab_only=True, logits_all=True)
 
     output_text = "😀"
-    ai_service = "testing"
+    ai_service = "label-suggestions"
 
     ## Test basic completion with utf8 multibyte
     mock_llama(llama, output_text)
