@@ -1718,6 +1718,7 @@ def functionary_v1_v2_chat_handler(
     model: Optional[str] = None,
     logits_processor: Optional[llama.LogitsProcessorList] = None,
     grammar: Optional[llama.LlamaGrammar] = None,
+    ai_service: Optional[str] = None,
     **kwargs,  # type: ignore
 ) -> Union[llama_types.ChatCompletion, Iterator[llama_types.ChatCompletionChunk]]:
     SYSTEM_MESSAGE = """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. The assistant calls functions with appropriate input when necessary"""
@@ -1934,6 +1935,7 @@ def functionary_v1_v2_chat_handler(
             model=model,
             logits_processor=logits_processor,
             grammar=grammar,
+            ai_service=ai_service
         )
         if stream is False:
             completion_or_completion_chunks["choices"][0]["text"] = completion_or_completion_chunks["choices"][0]["text"].lstrip()

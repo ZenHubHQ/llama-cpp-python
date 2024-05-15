@@ -455,8 +455,11 @@ async def create_chat_completion(
         "user",
     }
     kwargs = body.model_dump(exclude=exclude)
+    
     # Adds the ai_service value from the request body to the kwargs
+    # to be passed downstream to the llama_cpp.ChatCompletion object
     kwargs["ai_service"] = body.ai_service
+
     llama = llama_proxy(body.model)
     if body.logit_bias is not None:
         kwargs["logit_bias"] = (
@@ -474,8 +477,7 @@ async def create_chat_completion(
 
     if isinstance(iterator_or_completion, Iterator):
         # EAFP: It's easier to ask for forgiveness than permission
-        # NOTE: Including kwargs so it can also pass the "ai_service" argument to the iterator
-        first_response = await run_in_threadpool(next, iterator_or_completion, **kwargs)
+        first_response = await run_in_threadpool(next, iterator_or_completion)
 
         # If no exception was raised from first_response, we can assume that
         # the iterator is valid and we can use it to stream the response.

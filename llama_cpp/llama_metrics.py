@@ -45,7 +45,7 @@ class MetricsExporter:
     def __init__(self):
         self.labels = LABELS
         # One-time metrics
-        self._histrogram_load_time = Histogram(
+        self._histogram_load_time = Histogram(
             name="llama_cpp_python:load_t_seconds",
             documentation="Histogram of load time in seconds",
             labelnames=self.labels,
@@ -194,7 +194,7 @@ class MetricsExporter:
         """
         Log the metrics using the Prometheus client.
         """
-        self._histrogram_load_time.labels(**labels).observe(metrics.load_time)
+        self._histogram_load_time.labels(**labels).observe(metrics.load_time)
         self._histogram_sample_time.labels(**labels).observe(metrics.sample_time)
         if metrics.time_to_first_token:
             self._histogram_time_to_first_token.labels(**labels).observe(metrics.time_to_first_token)

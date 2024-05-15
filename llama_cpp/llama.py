@@ -1281,6 +1281,14 @@ class Llama:
 
             token_end_position = 0
             for token in remaining_tokens:
+                # Record TTFT metric (once)
+                if idx == 0:
+                    _metrics_dict["time_to_first_token"] = time.time() - _ttft_start
+                # Record TPOT metric
+                else:
+                    _tpot_metrics.append(time.time() - _tpot_start)
+                _tpot_start = time.time()  # reset
+
                 token_end_position += len(self.detokenize([token], prev_tokens=prompt_tokens + completion_tokens[:returned_tokens]))
 
                 logprobs_or_none: Optional[CompletionLogprobs] = None
@@ -1374,6 +1382,53 @@ class Llama:
                     print("Llama._create_completion: cache save", file=sys.stderr)
                 self.cache[prompt_tokens + completion_tokens] = self.save_state()
                 print("Llama._create_completion: cache saved", file=sys.stderr)
+            
+            ## PROMETHEUS METRICS IN STREAMING MODE ##
+            # Record TTFT metric -- Setting to None if no tokens were generated
+            if not _metrics_dict.get("time_to_first_token"):
+                _metrics_dict["time_to_first_token"] = None
+
+            # Record TPOT metrics (per generated token)
+            _metrics_dict["time_per_output_token"] = _tpot_metrics
+
+            # Record metrics from the C++ backend (converted to seconds)
+            _timings = llama_cpp.llama_get_timings(self._ctx.ctx)
+            _metrics_dict["load_time"] = round(_timings.t_load_ms / 1e3, 2)
+            _metrics_dict["sample_time"] = round(_timings.t_sample_ms / 1e3, 2)
+            _metrics_dict["sample_throughput"] = round(1e3 / _timings.t_sample_ms * _timings.n_sample, 2) if _timings.t_sample_ms > 0 else 0.0
+            _metrics_dict["prompt_eval_time"] = round(_timings.t_p_eval_ms / 1e3, 2)
+            _metrics_dict["prompt_eval_throughput"] = round(1e3 / _timings.t_p_eval_ms * _timings.n_p_eval, 2) if _timings.t_p_eval_ms > 0 else 0.0
+            _metrics_dict["completion_eval_time"] = round(_timings.t_eval_ms / 1e3, 2)
+            _metrics_dict["completion_eval_throughput"] = round(1e3 / _timings.t_eval_ms * _timings.n_eval, 2) if _timings.t_eval_ms > 0 else 0.0
+            _metrics_dict["end_to_end_latency"] = round((_timings.t_end_ms - _timings.t_start_ms) / 1e3, 2)
+
+            # Record prefill and generation token metrics
+            _metrics_dict["prefill_tokens"] = len(prompt_tokens)
+            _metrics_dict["generation_tokens"] = len(completion_tokens)
+
+            # Record system info
+            _gpu_utilization, _gpu_memory_used, _gpu_memory_free = get_gpu_general_info()
+            _metrics_dict["cpu_utilization"] = get_cpu_usage(_pid)  # TODO: Returning always 0.0 -> check
+            _metrics_dict["cpu_ram_pid"] = get_ram_usage(_pid)
+            _metrics_dict["gpu_utilization"] = _gpu_utilization
+            _metrics_dict["gpu_ram_usage"] = _gpu_memory_used
+            _metrics_dict["gpu_ram_free"] = _gpu_memory_free
+            _metrics_dict["gpu_ram_pid"] = get_gpu_info_by_pid(_pid)
+            _metrics_dict["state_size"] = llama_cpp.llama_get_state_size(self._ctx.ctx)
+            _metrics_dict["kv_cache_usage_ratio"] = round(1. * llama_cpp.llama_get_kv_cache_used_cells(self._ctx.ctx) / self.n_ctx(), 2)
+            _metrics_dict["system_info"] = {
+                "model": model_name,
+                "n_params": str(llama_cpp.llama_model_n_params(self.model)),
+                "n_embd": str(self.n_embd()),
+                "n_ctx": str(self.n_ctx()),
+                "n_vocab": str(self.n_vocab()),
+                "n_threads": str(self.n_threads)
+            } 
+
+            # Log metrics to Prometheus
+            _all_metrics = Metrics(**_metrics_dict)
+            self.metrics.log_metrics(_all_metrics, labels=_labels)
+            
             return
 
         if self.cache:
@@ -1448,6 +1503,8 @@ class Llama:
                 "token_logprobs": token_logprobs,
                 "top_logprobs": top_logprobs,
             }
+        
+        ## PROMETHEUS METRICS IN CHAT COMPLETION MODE ##
         # Record TTFT metric -- Setting to None if no tokens were generated
         if not _metrics_dict.get("time_to_first_token"):
             _metrics_dict["time_to_first_token"] = None
