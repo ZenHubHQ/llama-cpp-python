@@ -975,8 +975,6 @@ class Llama:
         _ttft_start = time.time()
         _pid = os.getpid()
         _tpot_metrics = []
-        if not ai_service:
-            raise ValueError("ai_service must be provided")
         _labels = {
             "service": ai_service if ai_service is not None else "not-specified",
             "request_type": "chat/completions",
