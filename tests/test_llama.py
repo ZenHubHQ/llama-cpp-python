@@ -153,7 +153,8 @@ def mock_llama(monkeypatch):
 
 def test_llama_patch(mock_llama):
     n_ctx = 128
-    ai_service = "label-suggestions"
+    ai_service_completion = "test-label-suggestions"
+    ai_service_streaming = "test-acceptance-criteria"
     llama = llama_cpp.Llama(model_path=MODEL, vocab_only=True, n_ctx=n_ctx)
     
     n_vocab = llama_cpp.llama_n_vocab(llama._model.model)
@@ -165,32 +166,32 @@ def test_llama_patch(mock_llama):
 
     ## Test basic completion from bos until eos
     mock_llama(llama, all_text)
-    completion = llama.create_completion("", max_tokens=36, ai_service=ai_service)
+    completion = llama.create_completion("", max_tokens=36, ai_service=ai_service_completion)
     assert completion["choices"][0]["text"] == all_text
     assert completion["choices"][0]["finish_reason"] == "stop"
 
     ## Test basic completion until eos
     mock_llama(llama, all_text)
-    completion = llama.create_completion(text, max_tokens=20, ai_service=ai_service)
+    completion = llama.create_completion(text, max_tokens=20, ai_service=ai_service_completion)
     assert completion["choices"][0]["text"] == output_text
     assert completion["choices"][0]["finish_reason"] == "stop"
 
     ## Test streaming completion until eos
     mock_llama(llama, all_text)
-    chunks = list(llama.create_completion(text, max_tokens=20, stream=True, ai_service=ai_service))
+    chunks = list(llama.create_completion(text, max_tokens=20, stream=True, ai_service=ai_service_streaming))
     assert "".join(chunk["choices"][0]["text"] for chunk in chunks) == output_text
     assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
 
     ## Test basic completion until stop sequence
     mock_llama(llama, all_text)
-    completion = llama.create_completion(text, max_tokens=20, stop=["lazy"], ai_service=ai_service)
+    completion = llama.create_completion(text, max_tokens=20, stop=["lazy"], ai_service=ai_service_completion)
     assert completion["choices"][0]["text"] == " jumps over the "
     assert completion["choices"][0]["finish_reason"] == "stop"
 
     ## Test streaming completion until stop sequence
     mock_llama(llama, all_text)
     chunks = list(
-        llama.create_completion(text, max_tokens=20, stream=True, stop=["lazy"], ai_service=ai_service)
+        llama.create_completion(text, max_tokens=20, stream=True, stop=["lazy"], ai_service=ai_service_streaming)
     )
     assert (
         "".join(chunk["choices"][0]["text"] for chunk in chunks) == " jumps over the "
@@ -199,13 +200,13 @@ def test_llama_patch(mock_llama):
 
     ## Test basic completion until length
     mock_llama(llama, all_text)
-    completion = llama.create_completion(text, max_tokens=2, ai_service=ai_service)
+    completion = llama.create_completion(text, max_tokens=2, ai_service=ai_service_completion)
     assert completion["choices"][0]["text"] == " jumps"
     assert completion["choices"][0]["finish_reason"] == "length"
 
     ## Test streaming completion until length
     mock_llama(llama, all_text)
-    chunks = list(llama.create_completion(text, max_tokens=2, stream=True, ai_service=ai_service))
+    chunks = list(llama.create_completion(text, max_tokens=2, stream=True, ai_service=ai_service_streaming))
     assert "".join(chunk["choices"][0]["text"] for chunk in chunks) == " jumps"
     assert chunks[-1]["choices"][0]["finish_reason"] == "length"
 
@@ -267,6 +268,22 @@ def test_llama_server():
             }
         ],
     }
+
+
+def test_metrics_endpoint():
+    from fastapi.testclient import TestClient
+    from llama_cpp.server.app import create_app, Settings
+
+    settings = Settings(
+        model=MODEL,
+        vocab_only=True,
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "test-label-suggestions" in response.text
+    assert "test-acceptance-criteria" in response.text
 
 
 @pytest.mark.parametrize(
