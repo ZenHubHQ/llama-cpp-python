@@ -7,6 +7,8 @@ from threading import Lock
 from functools import partial
 from typing import Iterator, List, Optional, Union, Dict
 
+from prometheus_client import make_asgi_app
+
 import llama_cpp
 
 import anyio
@@ -145,6 +147,11 @@ def create_app(
 
     assert model_settings is not None
     set_llama_proxy(model_settings=model_settings)
+
+    # Add prometheus asgi middleware to route /metrics requests
+    # see: https://prometheus.github.io/client_python/exporting/http/fastapi-gunicorn/
+    metrics_app = make_asgi_app()
+    app.mount("/metrics", metrics_app)
 
     if server_settings.disable_ping_events:
         set_ping_message_factory(lambda: bytes())
@@ -389,6 +396,7 @@ async def create_chat_completion(
                         {"role": "system", "content": "You are a helpful assistant."},
                         {"role": "user", "content": "What is the capital of France?"},
                     ],
+                    "ai_service": "copilot"
                 },
             },
             "json_mode": {
@@ -458,6 +466,11 @@ async def create_chat_completion(
         "min_tokens",
     }
     kwargs = body.model_dump(exclude=exclude)
+    
+    # Adds the ai_service value from the request body to the kwargs
+    # to be passed downstream to the llama_cpp.ChatCompletion object
+    kwargs["ai_service"] = body.ai_service
+
     llama = llama_proxy(body.model)
     if body.logit_bias is not None:
         kwargs["logit_bias"] = (

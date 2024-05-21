@@ -267,6 +267,9 @@ class CreateChatCompletionRequest(BaseModel):
         }
     }
 
+    # AI service added as request body parameter by Client
+    ai_service: Optional[str] = None
+
 
 class ModelData(TypedDict):
     id: str

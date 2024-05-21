@@ -1,7 +1,9 @@
 import os
 import sys
+import psutil
+import subprocess
 
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple, Union
 
 # Avoid "LookupError: unknown encoding: ascii" when open() called in a destructor
 outnull_file = open(os.devnull, "w")
@@ -75,3 +77,49 @@ class Singleton(object, metaclass=MetaSingleton):
 
     def __init__(self):
         super(Singleton, self).__init__()
+
+
+# Get snapshot of RAM and GPU usage before and after function execution.
+# Adapted from: https://github.com/abetlen/llama-cpp-python/issues/223#issuecomment-1556203616
+def get_cpu_usage(pid) -> float:
+    """
+    CPU usage in percentage by the current process.
+    """
+    process = psutil.Process(pid)
+    return process.cpu_percent()
+
+def get_ram_usage(pid) -> float:
+    """
+    RAM usage in MiB by the current process.
+    """
+    process = psutil.Process(pid)
+    ram_info = process.memory_info()
+    ram_usage = ram_info.rss / (1024 * 1024)  # Convert to MiB
+    return ram_usage
+
+def get_gpu_info_by_pid(pid) -> float:
+    """
+    GPU memory usage by the current process (if GPU is available)
+    """
+    try:
+        gpu_info = subprocess.check_output(["nvidia-smi", "--query-compute-apps=pid,used_memory", "--format=csv,noheader"]).decode("utf-8")
+        gpu_info = gpu_info.strip().split("\n")
+        for info in gpu_info:
+            gpu_pid, gpu_ram_usage = info.split(", ")
+            if int(gpu_pid) == pid:
+                return float(gpu_ram_usage.split()[0])
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return 0.0
+
+def get_gpu_general_info() -> Tuple[float, float, float]:
+    """
+    GPU general info (if GPU is available)
+    """
+    try:
+        gpu_info = subprocess.check_output(["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.free", "--format=csv,noheader"]).decode("utf-8")
+        gpu_utilization, gpu_memory_used, gpu_memory_free = gpu_info.strip().split("\n")[0].split(", ")
+        return tuple(float(tup.split()[0]) for tup in [gpu_utilization, gpu_memory_used, gpu_memory_free])
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return 0.0, 0.0, 0.0

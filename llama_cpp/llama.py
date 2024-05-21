@@ -38,6 +38,15 @@ from .llama_tokenizer import BaseLlamaTokenizer, LlamaTokenizer
 import llama_cpp.llama_cpp as llama_cpp
 import llama_cpp.llama_chat_format as llama_chat_format
 
+from llama_cpp.llama_metrics import Metrics, MetricsExporter
+
+from llama_cpp._utils import (
+    get_cpu_usage, 
+    get_ram_usage, 
+    get_gpu_info_by_pid,
+    get_gpu_general_info,
+)
+
 from llama_cpp.llama_speculative import LlamaDraftModel
 
 import numpy as np
@@ -60,6 +69,7 @@ class Llama:
     """High-level Python wrapper for a llama.cpp model."""
 
     __backend_initialized = False
+    __prometheus_metrics = MetricsExporter()
 
     def __init__(
         self,
@@ -458,6 +468,9 @@ class Llama:
             self.chat_format = "llama-2"
             if self.verbose:
                 print(f"Using fallback chat format: {self.chat_format}", file=sys.stderr)
+
+        # Prometheus metrics
+        self.metrics = self.__prometheus_metrics
 
     @property
     def ctx(self) -> llama_cpp.llama_context_p:
@@ -953,11 +966,24 @@ class Llama:
         logits_processor: Optional[LogitsProcessorList] = None,
         grammar: Optional[LlamaGrammar] = None,
         logit_bias: Optional[Dict[str, float]] = None,
+        ai_service: Optional[str] = None
     ) -> Union[
         Iterator[CreateCompletionResponse], Iterator[CreateCompletionStreamResponse]
     ]:
         assert self._ctx is not None
         assert suffix is None or suffix.__class__ is str
+
+        # Variables required for metric collection
+        _metrics_dict = {}
+        _ttft_start = time.time()
+        _pid = os.getpid()
+        _tpot_metrics = []
+        _labels = {
+            "service": ai_service if ai_service is not None else "not-specified",
+            "request_type": "chat/completions",
+        }
+        # Get CPU usage before generating completion so it can be used to calculate CPU when called after completing the process
+        _ = get_cpu_usage(_pid)
 
         completion_id: str = f"cmpl-{str(uuid.uuid4())}"
         created: int = int(time.time())
@@ -1089,23 +1115,26 @@ class Llama:
 
         finish_reason = "length"
         multibyte_fix = 0
-        for token in self.generate(
-            prompt_tokens,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            typical_p=typical_p,
-            temp=temperature,
-            tfs_z=tfs_z,
-            mirostat_mode=mirostat_mode,
-            mirostat_tau=mirostat_tau,
-            mirostat_eta=mirostat_eta,
-            frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty,
-            repeat_penalty=repeat_penalty,
-            stopping_criteria=stopping_criteria,
-            logits_processor=logits_processor,
-            grammar=grammar,
+        _tpot_start = time.time()
+        for idx, token in enumerate(
+            self.generate(
+                prompt_tokens,
+                top_k=top_k,
+                top_p=top_p,
+                min_p=min_p,
+                typical_p=typical_p,
+                temp=temperature,
+                tfs_z=tfs_z,
+                mirostat_mode=mirostat_mode,
+                mirostat_tau=mirostat_tau,
+                mirostat_eta=mirostat_eta,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                repeat_penalty=repeat_penalty,
+                stopping_criteria=stopping_criteria,
+                logits_processor=logits_processor,
+                grammar=grammar,
+            )
         ):
             assert self._model.model is not None
             if llama_cpp.llama_token_is_eog(self._model.model, token):
@@ -1262,6 +1291,14 @@ class Llama:
                 finish_reason = "length"
                 break
 
+            # Record TTFT metric (once)
+            if idx == 0:
+                _metrics_dict["time_to_first_token"] = time.time() - _ttft_start
+            # Record TPOT metric
+            else:
+                _tpot_metrics.append(time.time() - _tpot_start)
+            _tpot_start = time.time()  # reset
+
         if stopping_criteria is not None and stopping_criteria(
             self._input_ids, self._scores[-1, :]
         ):
@@ -1282,6 +1319,14 @@ class Llama:
 
             token_end_position = 0
             for token in remaining_tokens:
+                # Record TTFT metric (once)
+                if idx == 0:
+                    _metrics_dict["time_to_first_token"] = time.time() - _ttft_start
+                # Record TPOT metric
+                else:
+                    _tpot_metrics.append(time.time() - _tpot_start)
+                _tpot_start = time.time()  # reset
+
                 token_end_position += len(self.detokenize([token], prev_tokens=prompt_tokens + completion_tokens[:returned_tokens]))
 
                 logprobs_or_none: Optional[CompletionLogprobs] = None
@@ -1375,6 +1420,53 @@ class Llama:
                     print("Llama._create_completion: cache save", file=sys.stderr)
                 self.cache[prompt_tokens + completion_tokens] = self.save_state()
                 print("Llama._create_completion: cache saved", file=sys.stderr)
+            
+            ## PROMETHEUS METRICS IN STREAMING MODE ##
+            # Record TTFT metric -- Setting to None if no tokens were generated
+            if not _metrics_dict.get("time_to_first_token"):
+                _metrics_dict["time_to_first_token"] = None
+
+            # Record TPOT metrics (per generated token)
+            _metrics_dict["time_per_output_token"] = _tpot_metrics
+
+            # Record metrics from the C++ backend (converted to seconds)
+            _timings = llama_cpp.llama_get_timings(self._ctx.ctx)
+            _metrics_dict["load_time"] = round(_timings.t_load_ms / 1e3, 2)
+            _metrics_dict["sample_time"] = round(_timings.t_sample_ms / 1e3, 2)
+            _metrics_dict["sample_throughput"] = round(1e3 / _timings.t_sample_ms * _timings.n_sample, 2) if _timings.t_sample_ms > 0 else 0.0
+            _metrics_dict["prompt_eval_time"] = round(_timings.t_p_eval_ms / 1e3, 2)
+            _metrics_dict["prompt_eval_throughput"] = round(1e3 / _timings.t_p_eval_ms * _timings.n_p_eval, 2) if _timings.t_p_eval_ms > 0 else 0.0
+            _metrics_dict["completion_eval_time"] = round(_timings.t_eval_ms / 1e3, 2)
+            _metrics_dict["completion_eval_throughput"] = round(1e3 / _timings.t_eval_ms * _timings.n_eval, 2) if _timings.t_eval_ms > 0 else 0.0
+            _metrics_dict["end_to_end_latency"] = round((_timings.t_end_ms - _timings.t_start_ms) / 1e3, 2)
+
+            # Record prefill and generation token metrics
+            _metrics_dict["prefill_tokens"] = len(prompt_tokens)
+            _metrics_dict["generation_tokens"] = len(completion_tokens)
+
+            # Record system info
+            _gpu_utilization, _gpu_memory_used, _gpu_memory_free = get_gpu_general_info()
+            _metrics_dict["cpu_utilization"] = get_cpu_usage(_pid)  # TODO: Returning always 0.0 -> check
+            _metrics_dict["cpu_ram_pid"] = get_ram_usage(_pid)
+            _metrics_dict["gpu_utilization"] = _gpu_utilization
+            _metrics_dict["gpu_ram_usage"] = _gpu_memory_used
+            _metrics_dict["gpu_ram_free"] = _gpu_memory_free
+            _metrics_dict["gpu_ram_pid"] = get_gpu_info_by_pid(_pid)
+            _metrics_dict["state_size"] = llama_cpp.llama_get_state_size(self._ctx.ctx)
+            _metrics_dict["kv_cache_usage_ratio"] = round(1. * llama_cpp.llama_get_kv_cache_used_cells(self._ctx.ctx) / self.n_ctx(), 2)
+            _metrics_dict["system_info"] = {
+                "model": model_name,
+                "n_params": str(llama_cpp.llama_model_n_params(self.model)),
+                "n_embd": str(self.n_embd()),
+                "n_ctx": str(self.n_ctx()),
+                "n_vocab": str(self.n_vocab()),
+                "n_threads": str(self.n_threads)
+            } 
+
+            # Log metrics to Prometheus
+            _all_metrics = Metrics(**_metrics_dict)
+            self.metrics.log_metrics(_all_metrics, labels=_labels)
+            
             return
 
         if self.cache:
@@ -1449,12 +1541,59 @@ class Llama:
                 "token_logprobs": token_logprobs,
                 "top_logprobs": top_logprobs,
             }
+        
+        ## PROMETHEUS METRICS IN CHAT COMPLETION MODE ##
+        # Record TTFT metric -- Setting to None if no tokens were generated
+        if not _metrics_dict.get("time_to_first_token"):
+            _metrics_dict["time_to_first_token"] = None
+
+        # Record TPOT metrics (per generated token)
+        _metrics_dict["time_per_output_token"] = _tpot_metrics
+
+        # Record metrics from the C++ backend (converted to seconds)
+        _timings = llama_cpp.llama_get_timings(self._ctx.ctx)
+        _metrics_dict["load_time"] = round(_timings.t_load_ms / 1e3, 2)
+        _metrics_dict["sample_time"] = round(_timings.t_sample_ms / 1e3, 2)
+        _metrics_dict["sample_throughput"] = round(1e3 / _timings.t_sample_ms * _timings.n_sample, 2) if _timings.t_sample_ms > 0 else 0.0
+        _metrics_dict["prompt_eval_time"] = round(_timings.t_p_eval_ms / 1e3, 2)
+        _metrics_dict["prompt_eval_throughput"] = round(1e3 / _timings.t_p_eval_ms * _timings.n_p_eval, 2) if _timings.t_p_eval_ms > 0 else 0.0
+        _metrics_dict["completion_eval_time"] = round(_timings.t_eval_ms / 1e3, 2)
+        _metrics_dict["completion_eval_throughput"] = round(1e3 / _timings.t_eval_ms * _timings.n_eval, 2) if _timings.t_eval_ms > 0 else 0.0
+        _metrics_dict["end_to_end_latency"] = round((_timings.t_end_ms - _timings.t_start_ms) / 1e3, 2)
+
+        # Record prefill and generation token metrics
+        _metrics_dict["prefill_tokens"] = len(prompt_tokens)
+        _metrics_dict["generation_tokens"] = len(completion_tokens)
+
+        # Record system info
+        _gpu_utilization, _gpu_memory_used, _gpu_memory_free = get_gpu_general_info()
+        _metrics_dict["cpu_utilization"] = get_cpu_usage(_pid)  # TODO: Returning always 0.0 -> check
+        _metrics_dict["cpu_ram_pid"] = get_ram_usage(_pid)
+        _metrics_dict["gpu_utilization"] = _gpu_utilization
+        _metrics_dict["gpu_ram_usage"] = _gpu_memory_used
+        _metrics_dict["gpu_ram_free"] = _gpu_memory_free
+        _metrics_dict["gpu_ram_pid"] = get_gpu_info_by_pid(_pid)
+        _metrics_dict["state_size"] = llama_cpp.llama_get_state_size(self._ctx.ctx)
+        _metrics_dict["kv_cache_usage_ratio"] = round(1. * llama_cpp.llama_get_kv_cache_used_cells(self._ctx.ctx) / self.n_ctx(), 2)
+        _metrics_dict["system_info"] = {
+            "model": model_name,
+            "n_params": str(llama_cpp.llama_model_n_params(self.model)),
+            "n_embd": str(self.n_embd()),
+            "n_ctx": str(self.n_ctx()),
+            "n_vocab": str(self.n_vocab()),
+            "n_threads": str(self.n_threads)
+        } 
+
+        # Log metrics to Prometheus
+        _all_metrics = Metrics(**_metrics_dict)
+        self.metrics.log_metrics(_all_metrics, labels=_labels)
 
         yield {
             "id": completion_id,
             "object": "text_completion",
             "created": created,
             "model": model_name,
+            "service": ai_service,
             "choices": [
                 {
                     "text": text_str,
@@ -1497,6 +1636,7 @@ class Llama:
         logits_processor: Optional[LogitsProcessorList] = None,
         grammar: Optional[LlamaGrammar] = None,
         logit_bias: Optional[Dict[str, float]] = None,
+        ai_service: Optional[str] = None
     ) -> Union[CreateCompletionResponse, Iterator[CreateCompletionStreamResponse]]:
         """Generate text from a prompt.
 
@@ -1560,6 +1700,7 @@ class Llama:
             logits_processor=logits_processor,
             grammar=grammar,
             logit_bias=logit_bias,
+            ai_service=ai_service
         )
         if stream:
             chunks: Iterator[CreateCompletionStreamResponse] = completion_or_chunks
@@ -1594,6 +1735,7 @@ class Llama:
         logits_processor: Optional[LogitsProcessorList] = None,
         grammar: Optional[LlamaGrammar] = None,
         logit_bias: Optional[Dict[str, float]] = None,
+        ai_service: Optional[str] = None
     ) -> Union[CreateCompletionResponse, Iterator[CreateCompletionStreamResponse]]:
         """Generate text from a prompt.
 
@@ -1657,6 +1799,7 @@ class Llama:
             logits_processor=logits_processor,
             grammar=grammar,
             logit_bias=logit_bias,
+            ai_service=ai_service
         )
 
     def create_chat_completion(
@@ -1689,6 +1832,7 @@ class Llama:
         logit_bias: Optional[Dict[str, float]] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
+        ai_service: Optional[str] = None
     ) -> Union[
         CreateChatCompletionResponse, Iterator[CreateChatCompletionStreamResponse]
     ]:
@@ -1758,6 +1902,7 @@ class Llama:
             logits_processor=logits_processor,
             grammar=grammar,
             logit_bias=logit_bias,
+            ai_service=ai_service
         )
 
     def create_chat_completion_openai_v1(
