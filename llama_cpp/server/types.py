@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional, Union, Dict
+from typing import List, Optional, Union, Dict, Any
 from typing_extensions import TypedDict, Literal
 
 from pydantic import BaseModel, Field
@@ -317,3 +317,7 @@ class DetokenizeInputResponse(BaseModel):
     model_config = {
         "json_schema_extra": {"example": {"text": "How many tokens in this query?"}}
     }
+
+class HealthMetrics(BaseModel):
+    model_config = {"arbitrary_types_allowed": True}
+    task_queue_status: Dict[str, Any]

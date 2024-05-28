@@ -1,6 +1,7 @@
 import os
 import sys
 import psutil
+import asyncio
 import subprocess
 
 from typing import Any, Dict, List, Tuple, Union
@@ -11,6 +12,7 @@ errnull_file = open(os.devnull, "w")
 
 STDOUT_FILENO = 1
 STDERR_FILENO = 2
+
 
 class suppress_stdout_stderr(object):
     # NOTE: these must be "saved" here to avoid exceptions when using
@@ -88,6 +90,7 @@ def get_cpu_usage(pid) -> float:
     process = psutil.Process(pid)
     return process.cpu_percent()
 
+
 def get_ram_usage(pid) -> float:
     """
     RAM usage in MiB by the current process.
@@ -97,12 +100,19 @@ def get_ram_usage(pid) -> float:
     ram_usage = ram_info.rss / (1024 * 1024)  # Convert to MiB
     return ram_usage
 
+
 def get_gpu_info_by_pid(pid) -> float:
     """
     GPU memory usage by the current process (if GPU is available)
     """
     try:
-        gpu_info = subprocess.check_output(["nvidia-smi", "--query-compute-apps=pid,used_memory", "--format=csv,noheader"]).decode("utf-8")
+        gpu_info = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-compute-apps=pid,used_memory",
+                "--format=csv,noheader",
+            ]
+        ).decode("utf-8")
         gpu_info = gpu_info.strip().split("\n")
         for info in gpu_info:
             gpu_pid, gpu_ram_usage = info.split(", ")
@@ -112,14 +122,59 @@ def get_gpu_info_by_pid(pid) -> float:
         pass
     return 0.0
 
+
 def get_gpu_general_info() -> Tuple[float, float, float]:
     """
     GPU general info (if GPU is available)
     """
     try:
-        gpu_info = subprocess.check_output(["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.free", "--format=csv,noheader"]).decode("utf-8")
-        gpu_utilization, gpu_memory_used, gpu_memory_free = gpu_info.strip().split("\n")[0].split(", ")
-        return tuple(float(tup.split()[0]) for tup in [gpu_utilization, gpu_memory_used, gpu_memory_free])
+        gpu_info = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=utilization.gpu,memory.used,memory.free",
+                "--format=csv,noheader",
+            ]
+        ).decode("utf-8")
+        gpu_utilization, gpu_memory_used, gpu_memory_free = (
+            gpu_info.strip().split("\n")[0].split(", ")
+        )
+        return tuple(
+            float(tup.split()[0])
+            for tup in [gpu_utilization, gpu_memory_used, gpu_memory_free]
+        )
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
     return 0.0, 0.0, 0.0
+
+
+async def monitor_task_queue(status_dict: Dict[str, Union[int, float]]):
+    """
+    An asynchronous function that monitors the task queue and updates
+    a shared status dictionary with the number of tasks that have not
+    started and the number of tasks that are currently running.
+    It recursively calls itself to continuously monitor the task queue.
+    NOTE: There will always be 4 tasks running in the task queue:
+    - LifespanOn.main: Main application coroutine
+    - Server.serve: Server coroutine
+    - monitor_task_queue: Task queue monitoring coroutine
+    - RequestReponseCycle.run_asgi: ASGI single cycle coroutine
+    Any upcoming requests will be added to the task queue in the form of
+    another RequestReponseCycle.run_asgi coroutine.
+    """
+    all_tasks = asyncio.all_tasks()
+
+    # Get count of all running tasks
+    _all_tasks = [task for task in all_tasks if task._state == "PENDING"]
+    status_dict["running_tasks_count"] = len(_all_tasks)
+    # Get basic metadata of all running tasks
+    status_dict["running_tasks"] = {
+        task.get_name(): str(task.get_coro())
+        .encode("ascii", errors="ignore")
+        .strip()
+        .decode("ascii")
+        for task in all_tasks
+    }
+
+    asyncio.create_task(
+        monitor_task_queue(status_dict)
+    )  # pass status_dict to the next task
