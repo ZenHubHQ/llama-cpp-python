@@ -38,13 +38,13 @@ from .llama_tokenizer import BaseLlamaTokenizer, LlamaTokenizer
 import llama_cpp.llama_cpp as llama_cpp
 import llama_cpp.llama_chat_format as llama_chat_format
 
-from llama_cpp.llama_metrics import Metrics, MetricsExporter
+from llama_cpp.llama_metrics import RequestMetrics, MetricsExporter
 
 from llama_cpp._utils import (
     get_cpu_usage, 
     get_ram_usage, 
     get_gpu_info_by_pid,
-    get_gpu_general_info,
+    get_gpu_general_info
 )
 
 from llama_cpp.llama_speculative import LlamaDraftModel
@@ -938,7 +938,7 @@ class Llama:
             return output, total_tokens
         else:
             return output
-
+        
     def _create_completion(
         self,
         prompt: Union[str, List[int]],
@@ -972,7 +972,6 @@ class Llama:
     ]:
         assert self._ctx is not None
         assert suffix is None or suffix.__class__ is str
-
         # Variables required for metric collection
         _metrics_dict = {}
         _ttft_start = time.time()
@@ -1464,8 +1463,8 @@ class Llama:
             } 
 
             # Log metrics to Prometheus
-            _all_metrics = Metrics(**_metrics_dict)
-            self.metrics.log_metrics(_all_metrics, labels=_labels)
+            _all_metrics = RequestMetrics(**_metrics_dict)
+            self.metrics.log_request_metrics(_all_metrics, labels=_labels)
             
             return
 
@@ -1585,8 +1584,8 @@ class Llama:
         } 
 
         # Log metrics to Prometheus
-        _all_metrics = Metrics(**_metrics_dict)
-        self.metrics.log_metrics(_all_metrics, labels=_labels)
+        _all_metrics = RequestMetrics(**_metrics_dict)
+        self.metrics.log_request_metrics(_all_metrics, labels=_labels)
 
         yield {
             "id": completion_id,
