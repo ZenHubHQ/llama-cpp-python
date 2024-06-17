@@ -153,11 +153,10 @@ async def monitor_task_queue(status_dict: Dict[str, Union[int, float]]):
     a shared status dictionary with the number of tasks that have not
     started and the number of tasks that are currently running.
     It recursively calls itself to continuously monitor the task queue.
-    NOTE: There will always be 4 tasks running in the task queue:
+    NOTE: There will always be 3 tasks running in the task queue:
     - LifespanOn.main: Main application coroutine
     - Server.serve: Server coroutine
     - monitor_task_queue: Task queue monitoring coroutine
-    - RequestReponseCycle.run_asgi: ASGI single cycle coroutine
     Any upcoming requests will be added to the task queue in the form of
     another RequestReponseCycle.run_asgi coroutine.
     """
@@ -174,6 +173,8 @@ async def monitor_task_queue(status_dict: Dict[str, Union[int, float]]):
         .decode("ascii")
         for task in all_tasks
     }
+
+    await asyncio.sleep(5)  # adds a delay of 5 seconds to avoid overloading the CPU
 
     asyncio.create_task(
         monitor_task_queue(status_dict)

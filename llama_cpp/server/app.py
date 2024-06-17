@@ -246,22 +246,20 @@ openai_v1_tag = "OpenAI V1"
     response_model=HealthMetrics,
     summary="Server's health",
 )
-async def check_health(
-    
-):
-    # 4 running tasks + new scheduled request
-    if 0 <= task_queue_status.get("running_tasks_count", 0) <= 5:
+async def check_health():
+    # 3 running tasks + new scheduled request
+    if 0 <= task_queue_status.get("running_tasks_count", 0) <= 4:
         return JSONResponse(
             content={"status": "OK", "task_queue_status": task_queue_status}
         )
-    # 1 - 6 scheduled requests
-    elif 5 < task_queue_status.get("running_tasks_count", 0) <= 10:
+    # 2 - 6 scheduled requests
+    elif 4 < task_queue_status.get("running_tasks_count", 0) < 10:
         return JSONResponse(
             content={"status": "Warning", "task_queue_status": task_queue_status}
         )
     # 7+ scheduled requests
     # TODO: Evaluate if in this case we should manually stop the execution of certain tasks to clear the queue
-    elif task_queue_status.get("running_tasks_count", 0) > 10:
+    elif task_queue_status.get("running_tasks_count", 0) >= 10:
         return JSONResponse(
             content={"status": "Critical", "task_queue_status": task_queue_status}
         )
