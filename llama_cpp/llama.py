@@ -43,7 +43,7 @@ from .llama_tokenizer import BaseLlamaTokenizer, LlamaTokenizer
 import llama_cpp.llama_cpp as llama_cpp
 import llama_cpp.llama_chat_format as llama_chat_format
 
-from llama_cpp.llama_metrics import RequestMetrics, MetricsExporter
+from llama_cpp.llama_metrics import RequestMetrics
 
 from llama_cpp._utils import (
     get_cpu_usage, 
@@ -74,7 +74,6 @@ class Llama:
     """High-level Python wrapper for a llama.cpp model."""
 
     __backend_initialized = False
-    __prometheus_metrics = MetricsExporter()
 
     def __init__(
         self,
@@ -488,10 +487,7 @@ class Llama:
             self.chat_format = "llama-2"
             if self.verbose:
                 print(f"Using fallback chat format: {self.chat_format}", file=sys.stderr)
-
-        # Prometheus metrics
-        self.metrics = self.__prometheus_metrics
-
+                
     @property
     def ctx(self) -> llama_cpp.llama_context_p:
         assert self._ctx.ctx is not None

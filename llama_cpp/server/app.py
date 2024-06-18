@@ -48,7 +48,7 @@ from llama_cpp.server.types import (
 )
 from llama_cpp.server.errors import RouteErrorHandler
 from llama_cpp._utils import monitor_task_queue
-from llama_cpp.llama_metrics import QueueMetrics
+from llama_cpp.llama_metrics import MetricsExporter
 
 
 router = APIRouter(route_class=RouteErrorHandler)
@@ -102,14 +102,26 @@ def set_ping_message_factory(factory):
    _ping_message_factory = factory
 
 
+def set_metrics_exporter():
+    global metrics_exporter
+    try:
+        metrics_exporter
+    except NameError:
+        metrics_exporter = MetricsExporter()
+
+    return metrics_exporter
+
 task_queue_status = {}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     A context manager that launches tasks to be run during the application's lifespan.
     """
-    await monitor_task_queue(task_queue_status)
+    metrics_exporter = set_metrics_exporter()
+
+    await monitor_task_queue(task_queue_status, metrics_exporter)
     yield
 
 
@@ -514,7 +526,7 @@ async def create_chat_completion(
     # Adds the ai_service value from the request body to the kwargs
     # to be passed downstream to the llama_cpp.ChatCompletion object
     kwargs["ai_service"] = body.ai_service
-
+    
     llama = llama_proxy(body.model)
     if body.logit_bias is not None:
         kwargs["logit_bias"] = (
@@ -522,14 +534,6 @@ async def create_chat_completion(
             if body.logit_bias_type == "tokens"
             else body.logit_bias
         )
-
-    # Register current running tasks as a Prometheus metric
-    _labels = {
-        "service": "general",
-        "request_type": "chat/completions",
-    }
-    _queue_metrics = QueueMetrics(**task_queue_status)
-    llama.metrics.log_queue_metrics(_queue_metrics, _labels)
 
     if body.grammar is not None:
         kwargs["grammar"] = llama_cpp.LlamaGrammar.from_string(body.grammar)
@@ -543,6 +547,9 @@ async def create_chat_completion(
         else:
             kwargs["logits_processor"].extend(_min_tokens_logits_processor)
 
+    # Set the metrics exporter for the llama object
+    llama.metrics = set_metrics_exporter()
+    
     iterator_or_completion: Union[
         llama_cpp.ChatCompletion, Iterator[llama_cpp.ChatCompletionChunk]
     ] = await run_in_threadpool(llama.create_chat_completion, **kwargs)
