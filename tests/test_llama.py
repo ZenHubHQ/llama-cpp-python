@@ -5,9 +5,18 @@ import pytest
 from scipy.special import log_softmax
 
 import llama_cpp
+from llama_cpp.llama_metrics import MetricsExporter
 
 MODEL = "./vendor/llama.cpp/models/ggml-vocab-llama-spm.gguf"
 
+def set_test_metrics_exporter():
+    global metrics_exporter
+    try:
+        metrics_exporter
+    except NameError:
+        metrics_exporter = MetricsExporter()
+
+    return metrics_exporter
 
 def test_llama_cpp_tokenization():
     llama = llama_cpp.Llama(model_path=MODEL, vocab_only=True, verbose=False)
@@ -156,7 +165,8 @@ def test_llama_patch(mock_llama):
     ai_service_completion = "test-label-suggestions"
     ai_service_streaming = "test-acceptance-criteria"
     llama = llama_cpp.Llama(model_path=MODEL, vocab_only=True, n_ctx=n_ctx)
-    
+    llama.metrics = set_test_metrics_exporter()
+
     n_vocab = llama_cpp.llama_n_vocab(llama._model.model)
     assert n_vocab == 32000
 
@@ -231,6 +241,7 @@ def test_llama_pickle():
 
 def test_utf8(mock_llama):
     llama = llama_cpp.Llama(model_path=MODEL, vocab_only=True, logits_all=True)
+    llama.metrics = set_test_metrics_exporter()
 
     output_text = "😀"
     ai_service = "label-suggestions"
