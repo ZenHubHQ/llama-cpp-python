@@ -342,10 +342,33 @@ class MetricsExporter:
             documentation="KV-cache usage. 1 means 100 percent usage",
             labelnames=self.labels,
         )
-        self._gauge_running_tasks = Gauge(
+        self._gauge_running_tasks = Histogram(
             name="llama_cpp_python:running_tasks",
             documentation="Number of running tasks in the task queue",
             labelnames=self.labels,
+            buckets=[
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                12,
+                14,
+                16,
+                18,
+                20,
+                25,
+                30,
+                35,
+                40,
+                45,
+                50,
+            ],
         )
 
         # Server metadata
@@ -399,4 +422,4 @@ class MetricsExporter:
         """
         Log the metrics for the task queue.
         """
-        self._gauge_running_tasks.labels(**labels).set(metrics.running_tasks_count)
+        self._gauge_running_tasks.labels(**labels).observe(metrics.running_tasks_count)
