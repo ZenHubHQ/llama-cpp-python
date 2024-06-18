@@ -6,6 +6,9 @@ import subprocess
 
 from typing import Any, Dict, List, Tuple, Union
 
+from llama_cpp.llama_metrics import QueueMetrics, MetricsExporter
+
+
 # Avoid "LookupError: unknown encoding: ascii" when open() called in a destructor
 outnull_file = open(os.devnull, "w")
 errnull_file = open(os.devnull, "w")
@@ -147,20 +150,24 @@ def get_gpu_general_info() -> Tuple[float, float, float]:
     return 0.0, 0.0, 0.0
 
 
-async def monitor_task_queue(status_dict: Dict[str, Union[int, float]]):
+async def monitor_task_queue(
+    status_dict: Dict[str, Union[int, float]], metrics_exporter: MetricsExporter
+):
     """
     An asynchronous function that monitors the task queue and updates
     a shared status dictionary with the number of tasks that have not
     started and the number of tasks that are currently running.
     It recursively calls itself to continuously monitor the task queue.
-    NOTE: There will always be 4 tasks running in the task queue:
+    NOTE: There will always be 3 tasks running in the task queue:
     - LifespanOn.main: Main application coroutine
     - Server.serve: Server coroutine
     - monitor_task_queue: Task queue monitoring coroutine
-    - RequestReponseCycle.run_asgi: ASGI single cycle coroutine
     Any upcoming requests will be added to the task queue in the form of
     another RequestReponseCycle.run_asgi coroutine.
     """
+    if not isinstance(metrics_exporter, MetricsExporter):
+        raise ValueError("metrics_exporter must be an instance of MetricsExporter")
+    
     all_tasks = asyncio.all_tasks()
 
     # Get count of all running tasks
@@ -169,12 +176,23 @@ async def monitor_task_queue(status_dict: Dict[str, Union[int, float]]):
     # Get basic metadata of all running tasks
     status_dict["running_tasks"] = {
         task.get_name(): str(task.get_coro())
-        .encode("ascii", errors="ignore")
-        .strip()
-        .decode("ascii")
+        .lstrip("\u003C")
+        .rstrip("\u003E")
         for task in all_tasks
     }
 
+    assert status_dict is not None
+
+    # Register current running tasks as a Prometheus metric
+    _labels = {
+        "service": "general",
+        "request_type": "health_check",
+    }
+    _queue_metrics = QueueMetrics(**status_dict)
+    metrics_exporter.log_queue_metrics(_queue_metrics, _labels)
+
+    await asyncio.sleep(5)  # adds a delay of 5 seconds to avoid overloading the CPU
+
     asyncio.create_task(
-        monitor_task_queue(status_dict)
+        monitor_task_queue(status_dict, metrics_exporter)
     )  # pass status_dict to the next task
