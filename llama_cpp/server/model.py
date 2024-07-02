@@ -9,6 +9,7 @@ import llama_cpp.llama_speculative as llama_speculative
 import llama_cpp.llama_tokenizer as llama_tokenizer
 
 from llama_cpp.server.settings import ModelSettings
+from llama_cpp._logger import logger
 
 
 class LlamaProxy:
@@ -272,11 +273,11 @@ class LlamaProxy:
         if settings.cache:
             if settings.cache_type == "disk":
                 if settings.verbose:
-                    print(f"Using disk cache with size {settings.cache_size}")
+                    logger.info(f"Using disk cache with size {settings.cache_size}")
                 cache = llama_cpp.LlamaDiskCache(capacity_bytes=settings.cache_size)
             else:
                 if settings.verbose:
-                    print(f"Using ram cache with size {settings.cache_size}")
+                    logger.info(f"Using ram cache with size {settings.cache_size}")
                 cache = llama_cpp.LlamaRAMCache(capacity_bytes=settings.cache_size)
             _model.set_cache(cache)
         return _model

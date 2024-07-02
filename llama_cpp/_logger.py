@@ -17,7 +17,12 @@ GGML_LOG_LEVEL_TO_LOGGING_LEVEL = {
     5: logging.DEBUG,
 }
 
+# Set up logger with custom handler
 logger = logging.getLogger("llama-cpp-python")
+handler = logging.StreamHandler()
+formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
 
 @llama_cpp.llama_log_callback
@@ -27,7 +32,13 @@ def llama_log_callback(
     user_data: ctypes.c_void_p,
 ):
     if logger.level <= GGML_LOG_LEVEL_TO_LOGGING_LEVEL[level]:
-        print(text.decode("utf-8"), end="", flush=True, file=sys.stderr)
+        _text = text.decode("utf-8")
+        if _text.endswith("\n"):
+            _text = _text[:-1]
+        
+        # Skip if the message only contains "."
+        if not _text == ".":
+            logger.log(GGML_LOG_LEVEL_TO_LOGGING_LEVEL[level], _text)
 
 
 llama_cpp.llama_log_set(llama_log_callback, ctypes.c_void_p(0))

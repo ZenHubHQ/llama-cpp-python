@@ -66,7 +66,7 @@ from ._internals import (
     _LlamaSamplingContext,  # type: ignore
     _normalize_embedding,  # type: ignore
 )
-from ._logger import set_verbose
+from ._logger import set_verbose, logger
 from ._utils import suppress_stdout_stderr
 
 
@@ -403,7 +403,7 @@ class Llama:
                 )
 
         if self.verbose:
-            print(llama_cpp.llama_print_system_info().decode("utf-8"), file=sys.stderr)
+            logger.info(f'System info: {llama_cpp.llama_print_system_info().decode("utf-8")}')
 
         self.chat_format = chat_format
         self.chat_handler = chat_handler
@@ -434,10 +434,10 @@ class Llama:
         except Exception as e:
             self.metadata = {}
             if self.verbose:
-                print(f"Failed to load metadata: {e}", file=sys.stderr)
+                logger.error(f"Failed to load metadata: {e}")
 
         if self.verbose:
-            print(f"Model metadata: {self.metadata}", file=sys.stderr)
+            logger.info(f"Model metadata: {self.metadata}")
 
         eos_token_id = self.token_eos()
         bos_token_id = self.token_bos()
@@ -452,7 +452,7 @@ class Llama:
             template_choices["chat_template.default"] = self.metadata["tokenizer.chat_template"]
 
         if self.verbose and template_choices:
-            print(f"Available chat formats from metadata: {', '.join(template_choices.keys())}", file=sys.stderr)
+            logger.info(f"Available chat formats from metadata: {', '.join(template_choices.keys())}")
 
         for name, template in template_choices.items():
             self._chat_handlers[name] = llama_chat_format.Jinja2ChatFormatter(
@@ -474,19 +474,19 @@ class Llama:
             if chat_format is not None:
                 self.chat_format = chat_format
                 if self.verbose:
-                    print(f"Guessed chat format: {chat_format}", file=sys.stderr)
+                    logger.info(f"Guessed chat format: {chat_format}")
             else:
                 if self.verbose:
-                    print(f"Using gguf chat template: {template_choices['chat_template.default']}", file=sys.stderr)
-                    print(f"Using chat eos_token: {eos_token}", file=sys.stderr)
-                    print(f"Using chat bos_token: {bos_token}", file=sys.stderr)
+                    logger.info(f"Using gguf chat template: {template_choices['chat_template.default']}")
+                    logger.info(f"Using chat eos_token: {eos_token}")
+                    logger.info(f"Using chat bos_token: {bos_token}")
 
                 self.chat_format = "chat_template.default"
 
         if self.chat_format is None and self.chat_handler is None:
             self.chat_format = "llama-2"
             if self.verbose:
-                print(f"Using fallback chat format: {self.chat_format}", file=sys.stderr)
+                logger.info(f"Using fallback chat format: {self.chat_format}")
                 
     @property
     def ctx(self) -> llama_cpp.llama_context_p:
@@ -728,7 +728,8 @@ class Llama:
                     break
             if longest_prefix > 0:
                 if self.verbose:
-                    print("Llama.generate: prefix-match hit", file=sys.stderr)
+                    # print("Llama.generate: prefix-match hit", file=sys.stderr)
+                    logger.info("Llama.generate: prefix-match hit")
                 reset = False
                 tokens = tokens[longest_prefix:]
                 self.n_tokens = longest_prefix

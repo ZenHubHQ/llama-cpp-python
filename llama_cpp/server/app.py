@@ -51,6 +51,7 @@ from llama_cpp.server.types import (
 from llama_cpp.server.errors import RouteErrorHandler
 from llama_cpp._utils import monitor_task_queue
 from llama_cpp.llama_metrics import MetricsExporter
+from llama_cpp._logger import logger
 
 
 router = APIRouter(route_class=RouteErrorHandler)
@@ -211,9 +212,9 @@ async def get_event_publisher(
                     raise anyio.get_cancelled_exc_class()()
             await inner_send_chan.send(dict(data="[DONE]"))
         except anyio.get_cancelled_exc_class() as e:
-            print("disconnected")
+            logger.warning(f"Disconnected from client {request.client}")
             with anyio.move_on_after(1, shield=True):
-                print(f"Disconnected from client (via refresh/close) {request.client}")
+                logger.error(f"Disconnected from client (via refresh/close) {request.client}")
                 raise e
         finally:
             if on_complete:
