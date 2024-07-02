@@ -528,7 +528,6 @@ async def create_chat_completion(
         }
     ),
 ) -> llama_cpp.ChatCompletion:
-    # Extract relevant kwargs from the request body
     # This is a workaround for an issue in FastAPI dependencies
     # where the dependency is cleaned up before a StreamingResponse
     # is complete.
@@ -549,6 +548,7 @@ async def create_chat_completion(
         "min_tokens",
     }
     
+    # Extract relevant kwargs from the request body
     kwargs = body.model_dump(exclude=exclude)
     
     # Adds the ai_service value from the request body to the kwargs

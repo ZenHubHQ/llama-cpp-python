@@ -10,7 +10,13 @@ See [here](https://docs.github.com/en/pull-requests/collaborating-with-pull-requ
 
 4. Solve for any conflicts if they arise. Otherwise, proceed to the next step.
 
-5. Since changes have probably been made to the vendor libraries (`llama_cpp`, `kompute`), we need to recompile the `llama_cpp` package. Navigate to the `vendor/llama.cpp` folder and clean the build cache:
+5. Update all the git submodles:
+
+```
+git submodule update --recursive
+```
+
+6. Since changes have probably been made to the vendor libraries (`llama_cpp`, `kompute`), we need to recompile the `llama_cpp` package. Navigate to the `vendor/llama.cpp` folder and clean the build cache:
 
 ```
 make clean
