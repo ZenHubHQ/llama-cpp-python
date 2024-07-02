@@ -9,14 +9,13 @@ See [here](https://docs.github.com/en/pull-requests/collaborating-with-pull-requ
 3. Create a local branch `repo-sync` and pull the contents from the remote `repo-sync` branch.
 
 4. Solve for any conflicts if they arise. Otherwise, proceed to the next step.
-5. 
 
-6. Since changes have probably been made to the vendor libraries (`llama_cpp`, `kompute`), we need to recompile the `llama_cpp` package. Navigate to the `vendor/llama.cpp` folder and clean the build cache:
-git 
+5. Since changes have probably been made to the vendor libraries (`llama_cpp`, `kompute`), we need to recompile the `llama_cpp` package. Navigate to the `vendor/llama.cpp` folder and clean the build cache:
+
 ```
 make clean
 ```
-1. Navigate back to the root directory and type the following to recompile the `llama_cpp` package and build the dependenies again:
+6. Navigate back to the root directory and type the following to recompile the `llama_cpp` package and build the dependenies again:
 
 ```
 make deps && make build

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import os
 import json
 import typing
@@ -9,12 +11,15 @@ from threading import Lock
 from functools import partial
 from typing import Iterator, List, Optional, Union, Dict
 
+from prometheus_client import make_asgi_app
+
 import llama_cpp
 
 import anyio
 from anyio.streams.memory import MemoryObjectSendStream
 from starlette.concurrency import run_in_threadpool, iterate_in_threadpool
 from fastapi import Depends, FastAPI, APIRouter, Request, HTTPException, status, Body
+from fastapi.responses import JSONResponse
 from fastapi.middleware import Middleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
@@ -41,8 +46,11 @@ from llama_cpp.server.types import (
     TokenizeInputCountResponse,
     DetokenizeInputRequest,
     DetokenizeInputResponse,
+    HealthMetrics
 )
 from llama_cpp.server.errors import RouteErrorHandler
+from llama_cpp._utils import monitor_task_queue
+from llama_cpp.llama_metrics import MetricsExporter
 
 
 router = APIRouter(route_class=RouteErrorHandler)
@@ -97,6 +105,29 @@ def set_ping_message_factory(factory: typing.Callable[[], bytes]):
     _ping_message_factory = factory
 
 
+def set_metrics_exporter():
+    global metrics_exporter
+    try:
+        metrics_exporter
+    except NameError:
+        metrics_exporter = MetricsExporter()
+
+    return metrics_exporter
+
+task_queue_status = {}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    A context manager that launches tasks to be run during the application's lifespan.
+    """
+    metrics_exporter = set_metrics_exporter()
+
+    await monitor_task_queue(task_queue_status, metrics_exporter)
+    yield
+
+
 def create_app(
     settings: Settings | None = None,
     server_settings: ServerSettings | None = None,
@@ -136,6 +167,7 @@ def create_app(
         title="🦙 llama.cpp Python API",
         version=llama_cpp.__version__,
         root_path=server_settings.root_path,
+        lifespan=lifespan
     )
     app.add_middleware(
         CORSMiddleware,
@@ -148,6 +180,11 @@ def create_app(
 
     assert model_settings is not None
     set_llama_proxy(model_settings=model_settings)
+
+    # Add prometheus asgi middleware to route /metrics requests
+    # see: https://prometheus.github.io/client_python/exporting/http/fastapi-gunicorn/
+    metrics_app = make_asgi_app()
+    app.mount("/metrics", metrics_app)
 
     if server_settings.disable_ping_events:
         set_ping_message_factory(lambda: bytes())
@@ -222,6 +259,32 @@ async def authenticate(
 openai_v1_tag = "OpenAI V1"
 
 
+@router.get(
+    "/v1/health",
+    response_model=HealthMetrics,
+    summary="Server's health",
+)
+async def check_health():
+    # 3 running tasks + new scheduled request
+    if 0 <= task_queue_status.get("running_tasks_count", 0) <= 4:
+        return JSONResponse(
+            content={"status": "OK", "task_queue_status": task_queue_status}
+        )
+    # 2 - 6 scheduled requests
+    elif 4 < task_queue_status.get("running_tasks_count", 0) < 10:
+        return JSONResponse(
+            content={"status": "Warning", "task_queue_status": task_queue_status}
+        )
+    # 7+ scheduled requests
+    # TODO: Evaluate if in this case we should manually stop the execution of certain tasks to clear the queue
+    elif task_queue_status.get("running_tasks_count", 0) >= 10:
+        return JSONResponse(
+            content={"status": "Critical", "task_queue_status": task_queue_status}
+        )
+    else:
+        pass
+
+
 @router.post(
     "/v1/completions",
     summary="Completion",
@@ -283,7 +346,6 @@ async def create_completion(
         if request.url.path != "/v1/engines/copilot-codex/completions"
         else "copilot-codex"
     )
-
     exclude = {
         "n",
         "best_of",
@@ -360,7 +422,6 @@ async def create_embedding(
         **request.model_dump(exclude={"user"}),
     )
 
-
 @router.post(
     "/v1/chat/completions",
     summary="Chat",
@@ -405,6 +466,7 @@ async def create_chat_completion(
                         {"role": "system", "content": "You are a helpful assistant."},
                         {"role": "user", "content": "What is the capital of France?"},
                     ],
+                    "ai_service": "copilot"
                 },
             },
             "json_mode": {
@@ -466,6 +528,7 @@ async def create_chat_completion(
         }
     ),
 ) -> llama_cpp.ChatCompletion:
+    # Extract relevant kwargs from the request body
     # This is a workaround for an issue in FastAPI dependencies
     # where the dependency is cleaned up before a StreamingResponse
     # is complete.
@@ -485,7 +548,13 @@ async def create_chat_completion(
         "user",
         "min_tokens",
     }
+    
     kwargs = body.model_dump(exclude=exclude)
+    
+    # Adds the ai_service value from the request body to the kwargs
+    # to be passed downstream to the llama_cpp.ChatCompletion object
+    kwargs["ai_service"] = body.ai_service
+    
     llama = llama_proxy(body.model)
     if body.logit_bias is not None:
         kwargs["logit_bias"] = (
@@ -506,10 +575,13 @@ async def create_chat_completion(
         else:
             kwargs["logits_processor"].extend(_min_tokens_logits_processor)
 
+    # Set the metrics exporter for the llama object
+    llama.metrics = set_metrics_exporter()
+    
     iterator_or_completion: Union[
         llama_cpp.ChatCompletion, Iterator[llama_cpp.ChatCompletionChunk]
     ] = await run_in_threadpool(llama.create_chat_completion, **kwargs)
-
+    
     if isinstance(iterator_or_completion, Iterator):
         # EAFP: It's easier to ask for forgiveness than permission
         first_response = await run_in_threadpool(next, iterator_or_completion)
