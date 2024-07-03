@@ -21,6 +21,7 @@ from llama_cpp.server.types import (
     CreateEmbeddingRequest,
     CreateChatCompletionRequest,
 )
+from llama_cpp._logger import logger
 
 
 class ErrorResponse(TypedDict):
@@ -134,7 +135,7 @@ class RouteErrorHandler(APIRoute):
         ] = None,
     ) -> Tuple[int, ErrorResponse]:
         """Wraps error message in OpenAI style error response"""
-        print(f"Exception: {str(error)}", file=sys.stderr)
+        logger.error(f"Exception: {str(error)}")
         traceback.print_exc(file=sys.stderr)
         if body is not None and isinstance(
             body,

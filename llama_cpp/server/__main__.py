@@ -37,6 +37,7 @@ from llama_cpp.server.settings import (
     ConfigFileSettings,
 )
 from llama_cpp.server.cli import add_args_from_model, parse_model_from_args
+from llama_cpp._logger import logger, UVICORN_LOGGING_CONFIG
 
 
 def main():
@@ -75,7 +76,7 @@ def main():
             server_settings = parse_model_from_args(ServerSettings, args)
             model_settings = [parse_model_from_args(ModelSettings, args)]
     except Exception as e:
-        print(e, file=sys.stderr)
+        logger.error(e)
         parser.print_help()
         sys.exit(1)
     assert server_settings is not None
@@ -90,6 +91,7 @@ def main():
         port=int(os.getenv("PORT", server_settings.port)),
         ssl_keyfile=server_settings.ssl_keyfile,
         ssl_certfile=server_settings.ssl_certfile,
+        log_config=UVICORN_LOGGING_CONFIG
     )
 
 
